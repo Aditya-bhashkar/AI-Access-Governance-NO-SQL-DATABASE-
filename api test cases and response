@@ -1,0 +1,2679 @@
+# AI Access Governance Dashboard: API Test Cases
+
+72 test cases across 24 endpoints (3 per endpoint). Every request below was executed against the running application and every expected response is the real output (IDs, timestamps and tokens are replaced by placeholders).
+
+## 0. Conventions
+
+**Base URL:** `http://127.0.0.1:8000`
+
+**Authentication:** protected endpoints need `Authorization: Bearer <TOKEN>`. Get a token with `POST /auth/login` (see TC-04). The placeholders `<ALICE_TOKEN>`, `<ADAM_TOKEN>` etc. mean "the token of that test account".
+
+**Response envelope** (every response, success or error):
+
+```json
+{
+  "success": true,
+  "message": "...",
+  "data": {},
+  "pagination": null
+}
+```
+
+Errors have `"success": false`, the reason in `message`, and `data: null` (validation errors list the problems in `data.errors`).
+
+**Status codes:** 401 = not logged in, 403 = logged in but not allowed, 404 = not found or intentionally hidden, 409 = duplicate, 422 = invalid input.
+
+### Test accounts
+
+All accounts use the password `Password@123`.
+
+| Key | Name | Email | Role | Active |
+|---|---|---|---|---|
+| sam | Sam Superadmin | sam.super@example.com | superadmin | yes |
+| adam | Adam Admin | adam.admin@example.com | admin | yes |
+| ava | Ava Admin | ava.admin@example.com | admin | yes |
+| alice | Alice User | alice@example.com | user | yes |
+| bob | Bob User | bob@example.com | user | yes |
+| carl | Carl User | carl@example.com | user | yes |
+| dina | Dina User | dina@example.com | user | yes |
+| eve | Eve User | eve@example.com | user | yes |
+| zed | Zed User | zed@example.com | user | yes |
+| frank | Frank Frozen | frank.frozen@example.com | user | no |
+
+### Notes
+
+- Cases within a section depend on the state left by earlier cases (for example a record created earlier is read later), so run them in order against a fresh database, or use the cases individually after creating the data they need.
+- A record's `status` (`Active`, `Expiring Soon`, `Expired`) is calculated from today's date. The sample expiry dates are written for early October 2026, so adjust them if you run these later.
+- Role changes and deactivation take effect immediately even with an older token, because the backend re-reads the account on every request.
+
+## Index
+
+| Endpoint | Test cases |
+|---|---|
+| `POST /auth/register` | TC-01, TC-02, TC-03 |
+| `POST /auth/login` | TC-04, TC-05, TC-06 |
+| `GET /users/me` | TC-07, TC-08, TC-09 |
+| `GET /users` | TC-10, TC-11, TC-12 |
+| `POST /users/admin` | TC-13, TC-14, TC-15 |
+| `GET /users/{user_id}` | TC-16, TC-17, TC-18 |
+| `PATCH /users/{user_id}` | TC-19, TC-20, TC-21 |
+| `PATCH /users/{user_id}/status` | TC-22, TC-23, TC-24 |
+| `PATCH /users/{user_id}/role` | TC-25, TC-26, TC-27 |
+| `DELETE /users/{user_id}` | TC-28, TC-29, TC-30 |
+| `POST /api-access` | TC-31, TC-32, TC-33 |
+| `GET /api-access` | TC-34, TC-35, TC-36 |
+| `GET /api-access/{record_id}` | TC-37, TC-38, TC-39 |
+| `PUT /api-access/{record_id}` | TC-40, TC-41, TC-42 |
+| `DELETE /api-access/{record_id}` | TC-43, TC-44, TC-45 |
+| `GET /analytics/overview` | TC-46, TC-47, TC-48 |
+| `GET /analytics/complete` | TC-49, TC-50, TC-51 |
+| `GET /analytics/vendor` | TC-52, TC-53, TC-54 |
+| `GET /analytics/business-unit` | TC-55, TC-56, TC-57 |
+| `GET /analytics/expiring-soon` | TC-58, TC-59, TC-60 |
+| `GET /analytics/recent` | TC-61, TC-62, TC-63 |
+| `GET /api-access/{record_id}/audit` | TC-64, TC-65, TC-66 |
+| `GET /audits/recent` | TC-67, TC-68, TC-69 |
+| `GET /audits/user/{user_id}` | TC-70, TC-71, TC-72 |
+
+## 1. Authentication
+
+### POST /auth/register
+
+#### TC-01: Register a new user
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "name": "Nina New",
+  "email": "nina@example.com",
+  "password": "Password@123"
+}
+```
+
+**Expected output: `201`**
+
+```json
+{
+  "success": true,
+  "message": "Account created successfully.",
+  "data": {
+    "name": "Nina New",
+    "email": "nina@example.com",
+    "role": "user",
+    "id": "<ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z"
+  },
+  "pagination": null
+}
+```
+
+#### TC-02: Role injection is ignored (always `user`)
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "name": "Mallory",
+  "email": "mallory@example.com",
+  "password": "Password@123",
+  "role": "superadmin"
+}
+```
+
+**Expected output: `201`**
+
+```json
+{
+  "success": true,
+  "message": "Account created successfully.",
+  "data": {
+    "name": "Mallory",
+    "email": "mallory@example.com",
+    "role": "user",
+    "id": "<ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z"
+  },
+  "pagination": null
+}
+```
+
+#### TC-03: Duplicate email is rejected
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "name": "Alice Again",
+  "email": "alice@example.com",
+  "password": "Password@123"
+}
+```
+
+**Expected output: `409`**
+
+```json
+{
+  "success": false,
+  "message": "Email 'alice@example.com' already registered.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### POST /auth/login
+
+#### TC-04: Valid credentials return a JWT
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "alice@example.com",
+  "password": "Password@123"
+}
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Login successful.",
+  "data": {
+    "access_token": "<JWT>",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "user": {
+      "name": "Alice User",
+      "email": "alice@example.com",
+      "role": "user",
+      "id": "<ALICE_ID>",
+      "is_active": true,
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z"
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-05: Wrong password
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "alice@example.com",
+  "password": "WrongPassword"
+}
+```
+
+**Expected output: `401`**
+
+```json
+{
+  "success": false,
+  "message": "Incorrect email or password.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-06: Deactivated account cannot log in
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "frank.frozen@example.com",
+  "password": "Password@123"
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "Your account has been deactivated. Contact an administrator.",
+  "data": null,
+  "pagination": null
+}
+```
+
+
+## 2. User Management
+
+### GET /users/me
+
+#### TC-07: User reads own profile
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /users/me
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Profile retrieved.",
+  "data": {
+    "name": "Alice User",
+    "email": "alice@example.com",
+    "role": "user",
+    "id": "<ALICE_ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": false,
+      "change_role": false,
+      "delete": false
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-08: Superadmin reads own profile
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+GET /users/me
+Authorization: Bearer <SAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Profile retrieved.",
+  "data": {
+    "name": "Sam Superadmin",
+    "email": "sam.super@example.com",
+    "role": "superadmin",
+    "id": "<SAM_ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": false,
+      "change_role": false,
+      "delete": false
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-09: No token
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+GET /users/me
+```
+
+**Expected output: `401`**
+
+```json
+{
+  "success": false,
+  "message": "Not authenticated",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /users
+
+#### TC-10: Admin lists normal users only (paginated)
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /users?page=1&limit=2
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "9 user(s) found.",
+  "data": [
+    {
+      "name": "Mallory",
+      "email": "mallory@example.com",
+      "role": "user",
+      "id": "<ID>",
+      "is_active": true,
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "permissions": {
+        "view": true,
+        "edit": true,
+        "change_status": true,
+        "change_role": false,
+        "delete": true
+      }
+    },
+    {
+      "name": "Nina New",
+      "email": "nina@example.com",
+      "role": "user",
+      "id": "<ID>",
+      "is_active": true,
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "permissions": {
+        "view": true,
+        "edit": true,
+        "change_status": true,
+        "change_role": false,
+        "delete": true
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 2,
+    "total": 9,
+    "total_pages": 5
+  }
+}
+```
+
+#### TC-11: Superadmin filters admins and searches
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+GET /users?role=admin&search=ava
+Authorization: Bearer <SAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "1 user(s) found.",
+  "data": [
+    {
+      "name": "Ava Admin",
+      "email": "ava.admin@example.com",
+      "role": "admin",
+      "id": "<AVA_ID>",
+      "is_active": true,
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "permissions": {
+        "view": true,
+        "edit": true,
+        "change_status": true,
+        "change_role": true,
+        "delete": true
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "total_pages": 1
+  }
+}
+```
+
+#### TC-12: Normal user is forbidden
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /users
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You do not have permission to perform this action",
+  "data": null,
+  "pagination": null
+}
+```
+
+### POST /users/admin
+
+#### TC-13: Superadmin creates an admin
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+POST /users/admin
+Authorization: Bearer <SAM_TOKEN>
+Content-Type: application/json
+
+{
+  "name": "Neil New Admin",
+  "email": "neil.admin@example.com",
+  "password": "Str0ngPass!1"
+}
+```
+
+**Expected output: `201`**
+
+```json
+{
+  "success": true,
+  "message": "Admin account created successfully.",
+  "data": {
+    "name": "Neil New Admin",
+    "email": "neil.admin@example.com",
+    "role": "admin",
+    "id": "<ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": true,
+      "change_role": true,
+      "delete": true
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-14: Admin cannot create an admin
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+POST /users/admin
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "name": "Rogue Admin",
+  "email": "rogue@example.com",
+  "password": "Str0ngPass!1"
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You do not have permission to perform this action",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-15: Duplicate email
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+POST /users/admin
+Authorization: Bearer <SAM_TOKEN>
+Content-Type: application/json
+
+{
+  "name": "Adam Copy",
+  "email": "adam.admin@example.com",
+  "password": "Str0ngPass!1"
+}
+```
+
+**Expected output: `409`**
+
+```json
+{
+  "success": false,
+  "message": "Email is already registered.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /users/{user_id}
+
+#### TC-16: Admin views a normal user
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /users/<ALICE_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User retrieved.",
+  "data": {
+    "name": "Alice User",
+    "email": "alice@example.com",
+    "role": "user",
+    "id": "<ALICE_ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": true,
+      "change_role": false,
+      "delete": true
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-17: Admin cannot see a superadmin (hidden as 404)
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /users/<SAM_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "User not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-18: User cannot view another user (hidden as 404)
+
+**Caller:** Bob User (`user`)
+
+**Input**
+
+```http
+GET /users/<ALICE_ID>
+Authorization: Bearer <BOB_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "User not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### PATCH /users/{user_id}
+
+#### TC-19: Admin updates a normal user's name
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+PATCH /users/<BOB_ID>
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "name": "Bob Builder"
+}
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User updated successfully.",
+  "data": {
+    "name": "Bob Builder",
+    "email": "bob@example.com",
+    "role": "user",
+    "id": "<BOB_ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": true,
+      "change_role": false,
+      "delete": true
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-20: Security fields are rejected (role in body)
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+PATCH /users/<BOB_ID>
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "name": "Bob",
+  "role": "admin"
+}
+```
+
+**Expected output: `422`**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "data": {
+    "errors": [
+      "role: Extra inputs are not permitted"
+    ]
+  },
+  "pagination": null
+}
+```
+
+#### TC-21: Admin cannot edit another admin
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+PATCH /users/<AVA_ID>
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "name": "Hacked"
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You do not have permission to perform this action.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### PATCH /users/{user_id}/status
+
+#### TC-22: Admin deactivates a normal user
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+PATCH /users/<CARL_ID>/status
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "is_active": false
+}
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User deactivated.",
+  "data": {
+    "name": "Carl User",
+    "email": "carl@example.com",
+    "role": "user",
+    "id": "<CARL_ID>",
+    "is_active": false,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": true,
+      "change_role": false,
+      "delete": true
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-23: Admin cannot deactivate another admin
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+PATCH /users/<AVA_ID>/status
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "is_active": false
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You do not have permission to perform this action.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-24: Superadmin cannot deactivate own account
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+PATCH /users/<SAM_ID>/status
+Authorization: Bearer <SAM_TOKEN>
+Content-Type: application/json
+
+{
+  "is_active": false
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You cannot change the status of your own account.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### PATCH /users/{user_id}/role
+
+#### TC-25: Superadmin promotes a user to admin
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+PATCH /users/<DINA_ID>/role
+Authorization: Bearer <SAM_TOKEN>
+Content-Type: application/json
+
+{
+  "role": "admin"
+}
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User role updated.",
+  "data": {
+    "name": "Dina User",
+    "email": "dina@example.com",
+    "role": "admin",
+    "id": "<DINA_ID>",
+    "is_active": true,
+    "created_at": "2026-10-06T10:30:00Z",
+    "updated_at": "2026-10-06T10:30:00Z",
+    "permissions": {
+      "view": true,
+      "edit": true,
+      "change_status": true,
+      "change_role": true,
+      "delete": true
+    }
+  },
+  "pagination": null
+}
+```
+
+#### TC-26: Admin cannot change roles
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+PATCH /users/<ALICE_ID>/role
+Authorization: Bearer <ADAM_TOKEN>
+Content-Type: application/json
+
+{
+  "role": "admin"
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You do not have permission to perform this action",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-27: Superadmin role cannot be assigned
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+PATCH /users/<ALICE_ID>/role
+Authorization: Bearer <SAM_TOKEN>
+Content-Type: application/json
+
+{
+  "role": "superadmin"
+}
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "This role cannot be assigned through the API.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### DELETE /users/{user_id}
+
+#### TC-28: Admin deletes a normal user
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+DELETE /users/<EVE_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User deleted successfully.",
+  "data": {
+    "id": "<EVE_ID>"
+  },
+  "pagination": null
+}
+```
+
+#### TC-29: Admin cannot delete another admin
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+DELETE /users/<AVA_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You do not have permission to perform this action.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-30: User does not exist
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+DELETE /users/000000000000000000000000
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "User not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+
+## 3. API Access Records
+
+### POST /api-access
+
+#### TC-31: User creates a record (owner set by backend)
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+POST /api-access
+Authorization: Bearer <ALICE_TOKEN>
+Content-Type: application/json
+
+{
+  "username": "alice.dev",
+  "applicationName": "Support Chatbot",
+  "businessUnit": "Engineering",
+  "itSpoke": "Global",
+  "businessSpoke": "Enterprise",
+  "vendor": "Claude",
+  "dateIssued": "2026-09-01",
+  "expiryDate": "2026-10-20",
+  "notes": "Initial key",
+  "user_id": "<BOB_ID>"
+}
+```
+
+**Expected output: `201`**
+
+```json
+{
+  "success": true,
+  "message": "Record created successfully.",
+  "data": {
+    "username": "alice.dev",
+    "applicationName": "Support Chatbot",
+    "businessUnit": "Engineering",
+    "itSpoke": "Global",
+    "businessSpoke": "Enterprise",
+    "vendor": "Claude",
+    "dateIssued": "2026-09-01",
+    "expiryDate": "2026-10-20",
+    "notes": "Initial key",
+    "id": "<REC_ALICE_ID>",
+    "userId": "<ALICE_ID>",
+    "status": "Expiring Soon",
+    "createdBy": "<ALICE_ID>",
+    "createdAt": "2026-10-06T10:30:00Z",
+    "updatedAt": "2026-10-06T10:30:00Z"
+  },
+  "pagination": null
+}
+```
+
+#### TC-32: Missing required fields
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+POST /api-access
+Authorization: Bearer <ALICE_TOKEN>
+Content-Type: application/json
+
+{
+  "username": "only.username"
+}
+```
+
+**Expected output: `422`**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "data": {
+    "errors": [
+      "applicationName: Field required",
+      "businessUnit: Field required",
+      "itSpoke: Field required",
+      "businessSpoke: Field required",
+      "vendor: Field required",
+      "dateIssued: Field required",
+      "expiryDate: Field required"
+    ]
+  },
+  "pagination": null
+}
+```
+
+#### TC-33: Invalid vendor
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+POST /api-access
+Authorization: Bearer <ALICE_TOKEN>
+Content-Type: application/json
+
+{
+  "username": "alice.dev",
+  "applicationName": "Support Chatbot",
+  "businessUnit": "Engineering",
+  "itSpoke": "Global",
+  "businessSpoke": "Enterprise",
+  "vendor": "NotAVendor",
+  "dateIssued": "2026-09-01",
+  "expiryDate": "2026-10-20",
+  "notes": "Initial key"
+}
+```
+
+**Expected output: `422`**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "data": {
+    "errors": [
+      "vendor: Input should be 'ChatGPT', 'Gemini', 'Claude', 'Microsoft Copilot', 'GitHub Copilot', 'AWS Bedrock', 'Azure OpenAI' or 'Custom'"
+    ]
+  },
+  "pagination": null
+}
+```
+
+### GET /api-access
+
+#### TC-34: User sees only own records
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /api-access?page=1&limit=10
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "1 record(s) found.",
+  "data": [
+    {
+      "username": "alice.dev",
+      "applicationName": "Support Chatbot",
+      "businessUnit": "Engineering",
+      "itSpoke": "Global",
+      "businessSpoke": "Enterprise",
+      "vendor": "Claude",
+      "dateIssued": "2026-09-01",
+      "expiryDate": "2026-10-20",
+      "notes": "Initial key",
+      "id": "<REC_ALICE_ID>",
+      "userId": "<ALICE_ID>",
+      "status": "Expiring Soon",
+      "createdBy": "<ALICE_ID>",
+      "createdAt": "2026-10-06T10:30:00Z",
+      "updatedAt": "2026-10-06T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "total_pages": 1
+  }
+}
+```
+
+#### TC-35: Admin sees all records
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /api-access?page=1&limit=10
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "2 record(s) found.",
+  "data": [
+    {
+      "username": "alice.dev",
+      "applicationName": "Support Chatbot",
+      "businessUnit": "Engineering",
+      "itSpoke": "Global",
+      "businessSpoke": "Enterprise",
+      "vendor": "Claude",
+      "dateIssued": "2026-09-01",
+      "expiryDate": "2026-10-20",
+      "notes": "Initial key",
+      "id": "<REC_ALICE_ID>",
+      "userId": "<ALICE_ID>",
+      "status": "Expiring Soon",
+      "createdBy": "<ALICE_ID>",
+      "createdAt": "2026-10-06T10:30:00Z",
+      "updatedAt": "2026-10-06T10:30:00Z"
+    },
+    {
+      "username": "bob.dev",
+      "applicationName": "Data Pipeline",
+      "businessUnit": "Finance",
+      "itSpoke": "Global",
+      "businessSpoke": "Enterprise",
+      "vendor": "ChatGPT",
+      "dateIssued": "2026-09-01",
+      "expiryDate": "2027-06-30",
+      "notes": null,
+      "id": "<REC_BOB_ID>",
+      "userId": "<BOB_ID>",
+      "status": "Active",
+      "createdBy": "<BOB_ID>",
+      "createdAt": "2026-10-06T10:30:00Z",
+      "updatedAt": "2026-10-06T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 2,
+    "total_pages": 1
+  }
+}
+```
+
+#### TC-36: User with no records gets an empty list
+
+**Caller:** Zed User (`user`)
+
+**Input**
+
+```http
+GET /api-access
+Authorization: Bearer <ZED_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "0 record(s) found.",
+  "data": [],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 0,
+    "total_pages": 1
+  }
+}
+```
+
+### GET /api-access/{record_id}
+
+#### TC-37: Owner reads own record
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /api-access/<REC_ALICE_ID>
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Record retrieved.",
+  "data": {
+    "username": "alice.dev",
+    "applicationName": "Support Chatbot",
+    "businessUnit": "Engineering",
+    "itSpoke": "Global",
+    "businessSpoke": "Enterprise",
+    "vendor": "Claude",
+    "dateIssued": "2026-09-01",
+    "expiryDate": "2026-10-20",
+    "notes": "Initial key",
+    "id": "<REC_ALICE_ID>",
+    "userId": "<ALICE_ID>",
+    "status": "Expiring Soon",
+    "createdBy": "<ALICE_ID>",
+    "createdAt": "2026-10-06T10:30:00Z",
+    "updatedAt": "2026-10-06T10:30:00Z"
+  },
+  "pagination": null
+}
+```
+
+#### TC-38: Another user cannot read it (hidden as 404)
+
+**Caller:** Bob User (`user`)
+
+**Input**
+
+```http
+GET /api-access/<REC_ALICE_ID>
+Authorization: Bearer <BOB_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "API access record with id=<REC_ALICE_ID> not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-39: Admin reads any record
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /api-access/<REC_ALICE_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Record retrieved.",
+  "data": {
+    "username": "alice.dev",
+    "applicationName": "Support Chatbot",
+    "businessUnit": "Engineering",
+    "itSpoke": "Global",
+    "businessSpoke": "Enterprise",
+    "vendor": "Claude",
+    "dateIssued": "2026-09-01",
+    "expiryDate": "2026-10-20",
+    "notes": "Initial key",
+    "id": "<REC_ALICE_ID>",
+    "userId": "<ALICE_ID>",
+    "status": "Expiring Soon",
+    "createdBy": "<ALICE_ID>",
+    "createdAt": "2026-10-06T10:30:00Z",
+    "updatedAt": "2026-10-06T10:30:00Z"
+  },
+  "pagination": null
+}
+```
+
+### PUT /api-access/{record_id}
+
+#### TC-40: Owner updates own record
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+PUT /api-access/<REC_ALICE_ID>
+Authorization: Bearer <ALICE_TOKEN>
+Content-Type: application/json
+
+{
+  "notes": "Key rotated"
+}
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Record updated successfully.",
+  "data": {
+    "username": "alice.dev",
+    "applicationName": "Support Chatbot",
+    "businessUnit": "Engineering",
+    "itSpoke": "Global",
+    "businessSpoke": "Enterprise",
+    "vendor": "Claude",
+    "dateIssued": "2026-09-01",
+    "expiryDate": "2026-10-20",
+    "notes": "Key rotated",
+    "id": "<REC_ALICE_ID>",
+    "userId": "<ALICE_ID>",
+    "status": "Expiring Soon",
+    "createdBy": "<ALICE_ID>",
+    "createdAt": "2026-10-06T10:30:00Z",
+    "updatedAt": "2026-10-06T10:30:00Z"
+  },
+  "pagination": null
+}
+```
+
+#### TC-41: Another user cannot update it
+
+**Caller:** Bob User (`user`)
+
+**Input**
+
+```http
+PUT /api-access/<REC_ALICE_ID>
+Authorization: Bearer <BOB_TOKEN>
+Content-Type: application/json
+
+{
+  "notes": "Hijack"
+}
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "API access record with id=<REC_ALICE_ID> not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-42: Invalid vendor on update
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+PUT /api-access/<REC_ALICE_ID>
+Authorization: Bearer <ALICE_TOKEN>
+Content-Type: application/json
+
+{
+  "vendor": "NotAVendor"
+}
+```
+
+**Expected output: `422`**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "data": {
+    "errors": [
+      "vendor: Input should be 'ChatGPT', 'Gemini', 'Claude', 'Microsoft Copilot', 'GitHub Copilot', 'AWS Bedrock', 'Azure OpenAI' or 'Custom'"
+    ]
+  },
+  "pagination": null
+}
+```
+
+### DELETE /api-access/{record_id}
+
+#### TC-43: Another user cannot delete it
+
+**Caller:** Bob User (`user`)
+
+**Input**
+
+```http
+DELETE /api-access/<REC_ALICE_ID>
+Authorization: Bearer <BOB_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "API access record with id=<REC_ALICE_ID> not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-44: Admin deletes any record
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+DELETE /api-access/<REC_ALICE_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Record deleted successfully.",
+  "data": {
+    "id": "<REC_ALICE_ID>"
+  },
+  "pagination": null
+}
+```
+
+#### TC-45: Deleting again returns 404
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+DELETE /api-access/<REC_ALICE_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "API access record with id=<REC_ALICE_ID> not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+
+## 4. Analytics
+
+### GET /analytics/overview
+
+#### TC-46: User sees analytics for own records only
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/overview
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Analytics overview retrieved successfully.",
+  "data": {
+    "total": 1,
+    "active": 0,
+    "expiring_soon": 1,
+    "expired": 0
+  },
+  "pagination": null
+}
+```
+
+#### TC-47: Admin sees organization-wide analytics
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /analytics/overview
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Analytics overview retrieved successfully.",
+  "data": {
+    "total": 2,
+    "active": 1,
+    "expiring_soon": 1,
+    "expired": 0
+  },
+  "pagination": null
+}
+```
+
+#### TC-48: No token
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+GET /analytics/overview
+```
+
+**Expected output: `401`**
+
+```json
+{
+  "success": false,
+  "message": "Not authenticated",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /analytics/complete
+
+#### TC-49: User sees analytics for own records only
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/complete
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Complete analytics retrieved successfully.",
+  "data": {
+    "overview": {
+      "total": 1,
+      "active": 0,
+      "expiring_soon": 1,
+      "expired": 0
+    },
+    "by_vendor": [
+      {
+        "count": 1,
+        "vendor": "Claude"
+      }
+    ],
+    "by_business_unit": [
+      {
+        "count": 1,
+        "business_unit": "Engineering"
+      }
+    ],
+    "by_vendor_and_business_unit": [
+      {
+        "count": 1,
+        "vendor": "Claude",
+        "business_unit": "Engineering"
+      }
+    ]
+  },
+  "pagination": null
+}
+```
+
+#### TC-50: Admin sees organization-wide analytics
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /analytics/complete
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Complete analytics retrieved successfully.",
+  "data": {
+    "overview": {
+      "total": 2,
+      "active": 1,
+      "expiring_soon": 1,
+      "expired": 0
+    },
+    "by_vendor": [
+      {
+        "count": 1,
+        "vendor": "ChatGPT"
+      },
+      {
+        "count": 1,
+        "vendor": "Claude"
+      }
+    ],
+    "by_business_unit": [
+      {
+        "count": 1,
+        "business_unit": "Engineering"
+      },
+      {
+        "count": 1,
+        "business_unit": "Finance"
+      }
+    ],
+    "by_vendor_and_business_unit": [
+      {
+        "count": 1,
+        "vendor": "ChatGPT",
+        "business_unit": "Finance"
+      },
+      {
+        "count": 1,
+        "vendor": "Claude",
+        "business_unit": "Engineering"
+      }
+    ]
+  },
+  "pagination": null
+}
+```
+
+#### TC-51: No token
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+GET /analytics/complete
+```
+
+**Expected output: `401`**
+
+```json
+{
+  "success": false,
+  "message": "Not authenticated",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /analytics/vendor
+
+#### TC-52: User sees analytics for own records only
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/vendor
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Vendor analytics retrieved successfully.",
+  "data": [
+    {
+      "count": 1,
+      "vendor": "Claude"
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-53: Admin sees organization-wide analytics
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /analytics/vendor
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Vendor analytics retrieved successfully.",
+  "data": [
+    {
+      "count": 1,
+      "vendor": "ChatGPT"
+    },
+    {
+      "count": 1,
+      "vendor": "Claude"
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-54: No token
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+GET /analytics/vendor
+```
+
+**Expected output: `401`**
+
+```json
+{
+  "success": false,
+  "message": "Not authenticated",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /analytics/business-unit
+
+#### TC-55: User sees analytics for own records only
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/business-unit
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Business unit analytics retrieved successfully.",
+  "data": [
+    {
+      "count": 1,
+      "business_unit": "Engineering"
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-56: Admin sees organization-wide analytics
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /analytics/business-unit
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Business unit analytics retrieved successfully.",
+  "data": [
+    {
+      "count": 1,
+      "business_unit": "Engineering"
+    },
+    {
+      "count": 1,
+      "business_unit": "Finance"
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-57: No token
+
+**Caller:** none (public endpoint or no token)
+
+**Input**
+
+```http
+GET /analytics/business-unit
+```
+
+**Expected output: `401`**
+
+```json
+{
+  "success": false,
+  "message": "Not authenticated",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /analytics/expiring-soon
+
+#### TC-58: User sees own expiring records
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/expiring-soon?limit=5
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Expiring-soon records retrieved successfully.",
+  "data": [
+    {
+      "username": "alice.dev",
+      "application_name": "Support Chatbot",
+      "business_unit": "Engineering",
+      "it_spoke": "Global",
+      "business_spoke": "Enterprise",
+      "vendor": "Claude",
+      "date_issued": "2026-10-06T10:30:00Z",
+      "expiry_date": "2026-10-06T10:30:00Z",
+      "notes": "Key rotated",
+      "user_id": "<ALICE_ID>",
+      "created_by": "<ALICE_ID>",
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "_id": "<REC_ALICE_ID>",
+      "days_until_expiry": 15
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-59: Admin sees expiring records from everyone
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /analytics/expiring-soon?limit=5
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Expiring-soon records retrieved successfully.",
+  "data": [
+    {
+      "username": "alice.dev",
+      "application_name": "Support Chatbot",
+      "business_unit": "Engineering",
+      "it_spoke": "Global",
+      "business_spoke": "Enterprise",
+      "vendor": "Claude",
+      "date_issued": "2026-10-06T10:30:00Z",
+      "expiry_date": "2026-10-06T10:30:00Z",
+      "notes": "Key rotated",
+      "user_id": "<ALICE_ID>",
+      "created_by": "<ALICE_ID>",
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "_id": "<REC_ALICE_ID>",
+      "days_until_expiry": 15
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-60: Invalid limit (0)
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/expiring-soon?limit=0
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `422`**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "data": {
+    "errors": [
+      "query → limit: Input should be greater than or equal to 1"
+    ]
+  },
+  "pagination": null
+}
+```
+
+### GET /analytics/recent
+
+#### TC-61: User sees own recent records
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/recent?limit=5
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Recent API access records retrieved successfully.",
+  "data": [
+    {
+      "username": "alice.dev",
+      "application_name": "Support Chatbot",
+      "business_unit": "Engineering",
+      "it_spoke": "Global",
+      "business_spoke": "Enterprise",
+      "vendor": "Claude",
+      "date_issued": "2026-10-06T10:30:00Z",
+      "expiry_date": "2026-10-06T10:30:00Z",
+      "notes": "Key rotated",
+      "user_id": "<ALICE_ID>",
+      "created_by": "<ALICE_ID>",
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "_id": "<REC_ALICE_ID>"
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-62: Admin sees recent records from everyone
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /analytics/recent?limit=1
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Recent API access records retrieved successfully.",
+  "data": [
+    {
+      "username": "alice.dev",
+      "application_name": "Support Chatbot",
+      "business_unit": "Engineering",
+      "it_spoke": "Global",
+      "business_spoke": "Enterprise",
+      "vendor": "Claude",
+      "date_issued": "2026-10-06T10:30:00Z",
+      "expiry_date": "2026-10-06T10:30:00Z",
+      "notes": "Key rotated",
+      "user_id": "<ALICE_ID>",
+      "created_by": "<ALICE_ID>",
+      "created_at": "2026-10-06T10:30:00Z",
+      "updated_at": "2026-10-06T10:30:00Z",
+      "_id": "<REC_ALICE_ID>"
+    }
+  ],
+  "pagination": null
+}
+```
+
+#### TC-63: Limit above the maximum (500)
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /analytics/recent?limit=500
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `422`**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "data": {
+    "errors": [
+      "query → limit: Input should be less than or equal to 100"
+    ]
+  },
+  "pagination": null
+}
+```
+
+
+## 5. Audit
+
+### GET /api-access/{record_id}/audit
+
+#### TC-64: Owner reads own record history
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /api-access/<REC_ALICE_ID>/audit
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Audit history retrieved (2 entries).",
+  "data": {
+    "history": [
+      {
+        "action": "UPDATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "CREATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      }
+    ],
+    "total": 2,
+    "entity_id": "<REC_ALICE_ID>",
+    "entity_type": "api_access"
+  },
+  "pagination": null
+}
+```
+
+#### TC-65: Another user cannot read it
+
+**Caller:** Bob User (`user`)
+
+**Input**
+
+```http
+GET /api-access/<REC_ALICE_ID>/audit
+Authorization: Bearer <BOB_TOKEN>
+```
+
+**Expected output: `404`**
+
+```json
+{
+  "success": false,
+  "message": "API access record with id=<REC_ALICE_ID> not found.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-66: Admin reads any record history
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /api-access/<REC_ALICE_ID>/audit
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Audit history retrieved (2 entries).",
+  "data": {
+    "history": [
+      {
+        "action": "UPDATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "CREATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      }
+    ],
+    "total": 2,
+    "entity_id": "<REC_ALICE_ID>",
+    "entity_type": "api_access"
+  },
+  "pagination": null
+}
+```
+
+### GET /audits/recent
+
+#### TC-67: Admin reads recent audit logs
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /audits/recent?limit=2
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Recent audit logs retrieved (2 entries).",
+  "data": {
+    "logs": [
+      {
+        "action": "UPDATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "CREATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      }
+    ],
+    "total": 2
+  },
+  "pagination": null
+}
+```
+
+#### TC-68: Superadmin filters user-management events
+
+**Caller:** Sam Superadmin (`superadmin`)
+
+**Input**
+
+```http
+GET /audits/recent?entity_type=user&limit=3
+Authorization: Bearer <SAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "Recent audit logs retrieved (3 entries).",
+  "data": {
+    "logs": [
+      {
+        "action": "USER_DELETED",
+        "entity_type": "user",
+        "entity_id": "<EVE_ID>",
+        "performed_by": "<ADAM_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "target_email": "eve@example.com",
+          "target_role": "user",
+          "target_status": "active",
+          "target_user_id": "<EVE_ID>"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Adam Admin",
+        "performed_by_email": "adam.admin@example.com"
+      },
+      {
+        "action": "ROLE_CHANGED",
+        "entity_type": "user",
+        "entity_id": "<DINA_ID>",
+        "performed_by": "<SAM_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "target_email": "dina@example.com",
+          "old_role": "user",
+          "new_role": "admin",
+          "target_user_id": "<DINA_ID>"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Sam Superadmin",
+        "performed_by_email": "sam.super@example.com"
+      },
+      {
+        "action": "USER_DEACTIVATED",
+        "entity_type": "user",
+        "entity_id": "<CARL_ID>",
+        "performed_by": "<ADAM_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "target_email": "carl@example.com",
+          "target_role": "user",
+          "old_status": "active",
+          "new_status": "inactive",
+          "target_user_id": "<CARL_ID>"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Adam Admin",
+        "performed_by_email": "adam.admin@example.com"
+      }
+    ],
+    "total": 3
+  },
+  "pagination": null
+}
+```
+
+#### TC-69: Normal user is forbidden
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /audits/recent
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "Admin or superadmin role required to view system audit logs.",
+  "data": null,
+  "pagination": null
+}
+```
+
+### GET /audits/user/{user_id}
+
+#### TC-70: User reads own activity
+
+**Caller:** Alice User (`user`)
+
+**Input**
+
+```http
+GET /audits/user/<ALICE_ID>
+Authorization: Bearer <ALICE_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User audit logs retrieved (4 entries).",
+  "data": {
+    "logs": [
+      {
+        "action": "UPDATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "CREATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "LOGIN",
+        "entity_type": "user",
+        "entity_id": "<ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "email": "alice@example.com"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "LOGIN",
+        "entity_type": "user",
+        "entity_id": "<ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "email": "alice@example.com"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      }
+    ],
+    "total": 4,
+    "user_id": "<ALICE_ID>"
+  },
+  "pagination": null
+}
+```
+
+#### TC-71: User cannot read another user's activity
+
+**Caller:** Bob User (`user`)
+
+**Input**
+
+```http
+GET /audits/user/<ALICE_ID>
+Authorization: Bearer <BOB_TOKEN>
+```
+
+**Expected output: `403`**
+
+```json
+{
+  "success": false,
+  "message": "You can only view your own audit logs.",
+  "data": null,
+  "pagination": null
+}
+```
+
+#### TC-72: Admin reads any user's activity
+
+**Caller:** Adam Admin (`admin`)
+
+**Input**
+
+```http
+GET /audits/user/<ALICE_ID>
+Authorization: Bearer <ADAM_TOKEN>
+```
+
+**Expected output: `200`**
+
+```json
+{
+  "success": true,
+  "message": "User audit logs retrieved (4 entries).",
+  "data": {
+    "logs": [
+      {
+        "action": "UPDATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "CREATE",
+        "entity_type": "api_access",
+        "entity_id": "<REC_ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "vendor": "Claude",
+          "application_name": "Support Chatbot",
+          "username": "alice.dev"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "LOGIN",
+        "entity_type": "user",
+        "entity_id": "<ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "email": "alice@example.com"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      },
+      {
+        "action": "LOGIN",
+        "entity_type": "user",
+        "entity_id": "<ALICE_ID>",
+        "performed_by": "<ALICE_ID>",
+        "timestamp": "2026-10-06T10:30:00Z",
+        "metadata": {
+          "email": "alice@example.com"
+        },
+        "_id": "<ID>",
+        "performed_by_name": "Alice User",
+        "performed_by_email": "alice@example.com"
+      }
+    ],
+    "total": 4,
+    "user_id": "<ALICE_ID>"
+  },
+  "pagination": null
+}
+```
